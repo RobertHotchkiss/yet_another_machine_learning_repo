@@ -41,3 +41,28 @@ volume imbalance, every configured window includes:
   current completed bar; larger lags move backwards in time.
 
 Every share denominator is calculated over the exact same trailing window.
+
+## Live Binance-data / Deribit-execution trading
+
+`scripts/trade_binance_to_deribit.py` receives public live Binance USD-M
+BTCUSDT trade ticks, constructs the 0.1% `renko_ish` bars, and computes all
+model features from Binance data only. It executes its market orders only on
+Deribit mainnet `BTC-PERPETUAL`; Binance API credentials are not used.
+
+The native range-bar engine must be built once before use:
+
+```powershell
+cd crates\live_range_bars_rs
+maturin develop --release
+cd ..\..
+$env:DERIBIT_API_KEY = "..."
+$env:DERIBIT_API_SECRET = "..."
+.venv\Scripts\python scripts\trade_binance_to_deribit.py --live-execution
+```
+
+The runner refuses to start without `--live-execution`, credentials, a flat
+Deribit BTC perpetual position, and no working Deribit BTC perpetual orders.
+It enters with $10 market orders, uses $20 market orders to reverse a confirmed
+$10 position, and uses a reduce-only $10 market order to flatten on abstention.
+State and append-only signal/execution logs are written beneath `data\live`.
+Stop it with Ctrl+C.

@@ -6,6 +6,7 @@ Requires-Dist: ipykernel>=7.3.0
 Requires-Dist: keras>=3.15.1
 Requires-Dist: lightgbm>=4.6.0
 Requires-Dist: numpy>=2.3.0
+Requires-Dist: nautilus-trader>=1.220.0
 Requires-Dist: optuna>=4.0.0
 Requires-Dist: polars>=1.44.2
 Requires-Dist: scikit-learn>=1.7.0
