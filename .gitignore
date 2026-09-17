@@ -1,5 +1,7 @@
 .codex
 .idea/
+.uv-cache/
 data/
+plots/overnight_range/
 **/target/
 __pycache__/

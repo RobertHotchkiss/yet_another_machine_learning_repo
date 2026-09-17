@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import asdict, dataclass, field
+from typing import Any, Callable
 
 import numpy as np
 import polars as pl
@@ -11,6 +12,8 @@ from .data import prepare_dataset
 from .features import FeatureConfig
 from .model import ModelConfig, SelectiveSignalModel, choose_thresholds, fit_selective_model, signal_metrics
 from .splits import SplitPlan, walk_forward_splits
+
+DatasetPreparer = Callable[[pl.DataFrame, Any], tuple[pl.DataFrame, list[str]]]
 
 
 @dataclass(frozen=True)
@@ -46,7 +49,12 @@ class ValidationResult:
     validation_rows: int
 
 
-def run_validation(frame: pl.DataFrame, config: ExperimentConfig = ExperimentConfig()) -> ValidationResult:
+def run_validation(
+    frame: pl.DataFrame,
+    config: ExperimentConfig = ExperimentConfig(),
+    *,
+    dataset_preparer: DatasetPreparer = prepare_dataset,
+) -> ValidationResult:
     """Evaluate a configuration on development folds without fitting or scoring the final test.
 
     The newest ``test_fraction`` rows are reserved by the split plan.  This
@@ -55,7 +63,7 @@ def run_validation(frame: pl.DataFrame, config: ExperimentConfig = ExperimentCon
     """
     if config.edge_margin < 0:
         raise ValueError("edge_margin must be non-negative")
-    dataset, features = prepare_dataset(frame, config.feature)
+    dataset, features = dataset_preparer(frame, config.feature)
     split_plan = walk_forward_splits(dataset.height, test_fraction=config.test_fraction, n_folds=config.n_folds)
     probabilities: list[np.ndarray] = []
     targets: list[np.ndarray] = []
@@ -92,10 +100,15 @@ def run_validation(frame: pl.DataFrame, config: ExperimentConfig = ExperimentCon
     )
 
 
-def run_experiment(frame: pl.DataFrame, config: ExperimentConfig = ExperimentConfig()) -> ExperimentResult:
+def run_experiment(
+    frame: pl.DataFrame,
+    config: ExperimentConfig = ExperimentConfig(),
+    *,
+    dataset_preparer: DatasetPreparer = prepare_dataset,
+) -> ExperimentResult:
     """Build data, tune thresholds walk-forward, then report one untouched final test."""
-    validation_result = run_validation(frame, config)
-    dataset, features = prepare_dataset(frame, config.feature)
+    validation_result = run_validation(frame, config, dataset_preparer=dataset_preparer)
+    dataset, features = dataset_preparer(frame, config.feature)
     split_plan = validation_result.split_plan
     long_threshold, short_threshold = validation_result.long_threshold, validation_result.short_threshold
     final_model = fit_selective_model(dataset[split_plan.development.tolist()], features, config.model)
