@@ -13,3 +13,4 @@ Requires-Dist: plotly>=6.0.0
 Requires-Dist: scikit-learn>=1.7.0
 Requires-Dist: matplotlib>=3.11.2
 Requires-Dist: pandera>=0.33.1
+Requires-Dist: xgboost>=3.4.1
