@@ -27,8 +27,8 @@ def test_fx_next_bar_labels_are_shifted_and_final_row_is_null():
 
 
 def test_fx_dataset_keeps_non_volume_features_and_excludes_raw_columns():
-    dataset, features = prepare_fx_dataset(fx_bars())
-    assert dataset.height < 80
+    dataset, features = prepare_fx_dataset(fx_bars(250))
+    assert 0 < dataset.height < 250
     assert "log_return_10" in features
     assert "upper_wick_share" in features
     assert "trend_strength_10" in features
@@ -36,6 +36,10 @@ def test_fx_dataset_keeps_non_volume_features_and_excludes_raw_columns():
     assert "duration_log_zscore_10" in features
     assert "bar_time_share_window_10_lag_0" in features
     assert "bar_is_up_window_10_lag_9" in features
+    assert "bars_since_rolling_high_100" in features
+    assert "formation_speed_zscore_100" in features
+    assert "ema_fast_slow_gap_50_100" in features
+    assert "volatility_ratio_50_100" in features
     assert not any("volume" in name or "imbalance" in name for name in features)
     assert not {"timestamp", "close_timestamp", "mid_open", "mid_high", "mid_low", "mid_close"} & set(features)
     assert dataset.select(features).null_count().row(0).count(0) == len(features)
@@ -78,6 +82,34 @@ def test_fx_technical_features_capture_causal_regimes():
     assert row["direction_streak_share_3"] == pytest.approx(1 / 3)
     assert row["channel_position_3"] == pytest.approx((102.0 - 100.5) / (104.5 - 100.5))
     assert row["duration_log_zscore_3"] > 0
+
+
+def test_fx_extended_feature_families_are_created_for_every_window():
+    windows = (3, 5)
+    featured = build_fx_features(fx_bars(20), FxFeatureConfig(windows=windows))
+    families = (
+        "drawdown_from_high", "rebound_from_low", "distance_to_prior_high",
+        "distance_to_prior_low", "breakout_up", "breakout_down", "new_high_count",
+        "new_low_count", "bars_since_rolling_high", "bars_since_rolling_low",
+        "ema_distance", "ema_slope", "abs_return_mean",
+        "realized_volatility", "upside_volatility",
+        "downside_volatility", "max_abs_return", "return_jump_score",
+        "up_duration_log_mean", "down_duration_log_mean", "up_down_duration_spread",
+        "same_direction_duration_zscore", "return_per_second_mean",
+        "signed_range_per_second_mean", "fast_up_share", "fast_down_share",
+        "formation_speed_zscore",
+    )
+    for window in windows:
+        assert {f"{family}_{window}" for family in families} <= set(featured.columns)
+    assert {"ema_fast_slow_gap_3_5", "volatility_ratio_3_5"} <= set(featured.columns)
+    # Alternating directions must still yield a directional-duration statistic;
+    # it is the mean among matching-direction bars, not a null-only window.
+    assert featured["same_direction_duration_zscore_5"].tail(15).is_not_null().all()
+
+    # A feature at row n is unchanged if data strictly after n is removed.
+    full_value = featured.row(12, named=True)["ema_distance_5"]
+    truncated_value = build_fx_features(fx_bars(13), FxFeatureConfig(windows=windows)).row(12, named=True)["ema_distance_5"]
+    assert full_value == pytest.approx(truncated_value)
 
 
 def test_fx_features_require_the_fx_schema():

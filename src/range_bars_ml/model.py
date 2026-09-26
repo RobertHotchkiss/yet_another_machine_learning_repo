@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from math import ceil
 from pathlib import Path
 from typing import Any
 
@@ -62,9 +63,14 @@ def fit_selective_model(frame: pl.DataFrame, feature_names: list[str], config: M
     """Fit a classifier and calibrator, holding the latest training tail for calibration."""
     if not 0 < config.calibration_fraction < 0.5:
         raise ValueError("calibration_fraction must be between 0 and 0.5")
-    calibration_start = int(frame.height * (1 - config.calibration_fraction))
-    if calibration_start < 100 or frame.height - calibration_start < 50:
-        raise ValueError("Need at least 100 fit rows and 50 calibration rows")
+    # Isotonic calibration needs a meaningful tail even when the configured fraction is small.
+    # At the default 10%, this avoids accidentally requiring 500 rows merely to reach 50.
+    calibration_rows = max(50, ceil(frame.height * config.calibration_fraction))
+    calibration_start = frame.height - calibration_rows
+    if calibration_start < 100:
+        raise ValueError(
+            f"Need at least 150 training rows for 100 fit rows and 50 calibration rows; got {frame.height}"
+        )
     fit, calibration = frame[:calibration_start], frame[calibration_start:]
     estimator = LGBMClassifier(
         objective="binary", n_estimators=config.n_estimators, learning_rate=config.learning_rate,

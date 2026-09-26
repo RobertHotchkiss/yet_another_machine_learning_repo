@@ -50,6 +50,38 @@ def _config(**overrides):
     return OvernightRangeBreakoutConfig(buffer_pips=0, **overrides)
 
 
+def _midpoint(frame: pl.DataFrame) -> pl.DataFrame:
+    return frame.select([
+        "timestamp",
+        *[((pl.col(f"bid_{field}") + pl.col(f"ask_{field}")) / 2).alias(field)
+          for field in ("open", "high", "low", "close")],
+    ])
+
+
+def test_midpoint_ohlc_is_detected_and_uses_midpoint_execution():
+    row = build_overnight_range_breakout_ledger(_midpoint(_session()), _config()).row(0, named=True)
+
+    assert row["side"] == "long"
+    assert row["entry_price"] == pytest.approx(1.1011)
+    assert row["exit_reason"] == "target"
+    assert row["exit_price"] == pytest.approx(1.1019)
+
+
+def test_missing_minutes_enter_at_next_available_open():
+    frame = _midpoint(_session())
+    missing_entry_time = datetime(2026, 1, 5, 7, 1, tzinfo=UTC)
+    delayed_entry = frame.filter(pl.col("timestamp") == missing_entry_time).with_columns(
+        pl.col("timestamp") + timedelta(minutes=1)
+    )
+    frame = pl.concat([frame.filter(pl.col("timestamp") != missing_entry_time), delayed_entry]).sort("timestamp")
+
+    row = build_overnight_range_breakout_ledger(frame, _config()).row(0, named=True)
+
+    assert row["status"] == "entered"
+    assert row["entry_timestamp"] == datetime(2026, 1, 5, 7, 2, tzinfo=UTC)
+    assert row["trade_coverage"] < 1
+
+
 def test_long_breakout_uses_next_ask_open_and_bid_target_exit():
     ledger = build_overnight_range_breakout_ledger(_session(), _config())
     row = ledger.row(0, named=True)

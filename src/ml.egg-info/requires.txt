@@ -8,3 +8,4 @@ polars>=1.44.2
 plotly>=6.0.0
 scikit-learn>=1.7.0
 matplotlib>=3.11.2
+pandera>=0.33.1

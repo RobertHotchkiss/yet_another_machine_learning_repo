@@ -24,6 +24,12 @@ def test_model_config_complexity_settings_reach_lightgbm():
     assert params["n_jobs"] == 1
 
 
+def test_model_uses_a_minimum_calibration_tail_for_small_training_frames():
+    frame, features = prepare_dataset(bars(170))
+    model = fit_selective_model(frame, features, ModelConfig(n_estimators=2, n_jobs=1))
+    assert model.calibrator.X_thresholds_.size > 0
+
+
 def test_validation_only_does_not_predict_the_final_test_rows(monkeypatch):
     import range_bars_ml.pipeline as pipeline
 

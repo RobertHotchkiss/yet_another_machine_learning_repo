@@ -6,16 +6,12 @@ from dataclasses import dataclass
 
 import polars as pl
 
+from .pricing import resolve_pricing_schema
 
 REQUIRED_LEDGER_COLUMNS = {
     "session_date", "status", "side", "range_high", "range_low", "range_open", "range_close",
     "range_size", "range_pips", "entry_timestamp", "entry_price", "gross_pnl_pips", "exit_reason",
     "range_coverage", "trade_coverage",
-}
-REQUIRED_BAR_COLUMNS = {
-    "timestamp",
-    "bid_open", "bid_high", "bid_low", "bid_close",
-    "ask_open", "ask_high", "ask_low", "ask_close",
 }
 
 
@@ -25,8 +21,9 @@ class OvernightRangeFeatureConfig:
 
     daily_range_windows: tuple[int, ...] = (5, 20)
     moving_average_window: int = 20
-    minimum_range_coverage: float = 1.0
-    minimum_trade_coverage: float = 1.0
+    minimum_range_coverage: float = 0.0
+    minimum_trade_coverage: float = 0.0
+    price_mode: str = "auto"
 
     def __post_init__(self) -> None:
         if not self.daily_range_windows or any(window < 1 for window in self.daily_range_windows):
@@ -35,6 +32,8 @@ class OvernightRangeFeatureConfig:
             raise ValueError("moving_average_window must be positive.")
         if not 0 <= self.minimum_range_coverage <= 1 or not 0 <= self.minimum_trade_coverage <= 1:
             raise ValueError("minimum coverage values must be in [0, 1].")
+        if self.price_mode not in {"auto", "bid_ask", "midpoint"}:
+            raise ValueError("price_mode must be one of: auto, bid_ask, midpoint.")
 
 
 def _validate_columns(frame: pl.DataFrame, required: set[str], name: str) -> None:
@@ -44,10 +43,11 @@ def _validate_columns(frame: pl.DataFrame, required: set[str], name: str) -> Non
 
 
 def _daily_history(bars: pl.DataFrame, config: OvernightRangeFeatureConfig) -> pl.DataFrame:
+    pricing = resolve_pricing_schema(bars, config.price_mode)
     daily = (
         bars.sort("timestamp")
         .with_columns([
-            ((pl.col(f"bid_{field}") + pl.col(f"ask_{field}")) / 2).alias(f"_mid_{field}")
+            pricing.mid_expression(field)
             for field in ("open", "high", "low", "close")
         ] + [pl.col("timestamp").dt.convert_time_zone("Europe/London").dt.date().alias("session_date")])
         .group_by("session_date", maintain_order=True)
@@ -113,7 +113,7 @@ def build_overnight_range_features(
     trading day, so no current-day future prices enter the feature set.
     """
     _validate_columns(ledger, REQUIRED_LEDGER_COLUMNS, "ledger")
-    _validate_columns(bars, REQUIRED_BAR_COLUMNS, "bars")
+    resolve_pricing_schema(bars, config.price_mode)
     if "r_return" not in ledger.columns:
         if "r_multiple" not in ledger.columns:
             raise ValueError("ledger is missing r_return (or the legacy r_multiple column).")

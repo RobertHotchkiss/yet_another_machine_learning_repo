@@ -8,13 +8,9 @@ from zoneinfo import ZoneInfo
 
 import polars as pl
 
+from .pricing import resolve_pricing_schema
 
 LONDON = ZoneInfo("Europe/London")
-REQUIRED_COLUMNS = {
-    "timestamp",
-    "bid_open", "bid_high", "bid_low", "bid_close",
-    "ask_open", "ask_high", "ask_low", "ask_close",
-}
 
 
 @dataclass(frozen=True)
@@ -33,6 +29,7 @@ class OvernightRangeBreakoutConfig:
     buffer_pips: float = 5.0
     stop_range_multiple: float = 1.0
     target_range_multiple: float = 1.0
+    price_mode: str = "auto"
 
     def __post_init__(self) -> None:
         if not self.range_start < self.range_end < self.exit_time:
@@ -43,12 +40,12 @@ class OvernightRangeBreakoutConfig:
             raise ValueError("buffer_pips cannot be negative.")
         if self.stop_range_multiple <= 0 or self.target_range_multiple <= 0:
             raise ValueError("stop_range_multiple and target_range_multiple must be positive.")
+        if self.price_mode not in {"auto", "bid_ask", "midpoint"}:
+            raise ValueError("price_mode must be one of: auto, bid_ask, midpoint.")
 
 
-def _validate_frame(frame: pl.DataFrame) -> None:
-    missing = sorted(REQUIRED_COLUMNS - set(frame.columns))
-    if missing:
-        raise ValueError(f"frame is missing required columns: {', '.join(missing)}.")
+def _validate_frame(frame: pl.DataFrame, price_mode: str) -> None:
+    resolve_pricing_schema(frame, price_mode)
     timestamp_type = frame.schema["timestamp"]
     if not isinstance(timestamp_type, pl.Datetime) or timestamp_type.time_zone is None:
         raise ValueError("timestamp must be a timezone-aware Polars Datetime column.")
@@ -108,13 +105,16 @@ def build_overnight_range_breakout_ledger(
     contiguous minute's ask open and exit on bid prices; shorts use the mirror
     convention. Partial sessions remain in the ledger with coverage fields.
     """
-    _validate_frame(frame)
+    _validate_frame(frame, config.price_mode)
     if frame.is_empty():
         return _empty_ledger()
 
+    pricing = resolve_pricing_schema(frame, config.price_mode)
     bars = frame.sort("timestamp").with_columns([
-        ((pl.col("bid_high") + pl.col("ask_high")) / 2).alias("_mid_high"),
-        ((pl.col("bid_low") + pl.col("ask_low")) / 2).alias("_mid_low"),
+        pricing.mid_expression("open"),
+        pricing.mid_expression("high"),
+        pricing.mid_expression("low"),
+        pricing.mid_expression("close"),
         pl.col("timestamp").dt.convert_time_zone("Europe/London").dt.date().alias("_session_date"),
     ])
     sessions = bars.partition_by("_session_date", as_dict=False, maintain_order=True)
@@ -156,8 +156,8 @@ def build_overnight_range_breakout_ledger(
 
         high = max(float(bar["_mid_high"]) for bar in range_bars)
         low = min(float(bar["_mid_low"]) for bar in range_bars)
-        range_open = (float(range_bars[0]["bid_open"]) + float(range_bars[0]["ask_open"])) / 2
-        range_close = (float(range_bars[-1]["bid_close"]) + float(range_bars[-1]["ask_close"])) / 2
+        range_open = float(range_bars[0]["_mid_open"])
+        range_close = float(range_bars[-1]["_mid_close"])
         size = high - low
         buffer = config.buffer_pips * config.pip_size
         long_trigger, short_trigger = high + buffer, low - buffer
@@ -181,8 +181,8 @@ def build_overnight_range_breakout_ledger(
         for bar in trade_bars:
             if bar["timestamp"] >= final_trigger_time:
                 break
-            hit_long = float(bar["ask_high"]) >= long_trigger
-            hit_short = float(bar["bid_low"]) <= short_trigger
+            hit_long = float(bar[pricing.high_column("long")]) >= long_trigger
+            hit_short = float(bar[pricing.low_column("short")]) <= short_trigger
             if hit_long and hit_short:
                 row.update({
                     "status": "ambiguous_first_break",
@@ -201,15 +201,15 @@ def build_overnight_range_breakout_ledger(
             continue
 
         breakout_time = breakout["timestamp"]
-        entry_time = breakout_time + timedelta(minutes=1)
-        entry_bar = next((bar for bar in trade_bars if bar["timestamp"] == entry_time), None)
+        entry_bar = next((bar for bar in trade_bars if bar["timestamp"] > breakout_time), None)
         row.update({"side": side, "breakout_timestamp": breakout_time})
         if entry_bar is None:
             row.update({"status": "missing_entry_bar", "exit_reason": "not_entered_missing_entry_bar"})
             rows.append(row)
             continue
 
-        entry = float(entry_bar["ask_open"] if side == "long" else entry_bar["bid_open"])
+        entry_time = entry_bar["timestamp"]
+        entry = float(entry_bar[pricing.entry_column(side)])
         risk = size * config.stop_range_multiple
         reward = size * config.target_range_multiple
         stop = entry - risk if side == "long" else entry + risk
@@ -225,11 +225,11 @@ def build_overnight_range_breakout_ledger(
         exit_reason: str | None = None
         for bar in active_bars:
             if side == "long":
-                stop_hit = float(bar["bid_low"]) <= stop
-                target_hit = float(bar["bid_high"]) >= target
+                stop_hit = float(bar[pricing.low_column(side)]) <= stop
+                target_hit = float(bar[pricing.high_column(side)]) >= target
             else:
-                stop_hit = float(bar["ask_high"]) >= stop
-                target_hit = float(bar["ask_low"]) <= target
+                stop_hit = float(bar[pricing.high_column(side)]) >= stop
+                target_hit = float(bar[pricing.low_column(side)]) <= target
             if stop_hit:  # Conservative when both levels are reached in one bar.
                 exit_bar, exit_price, exit_reason = bar, stop, "stop"
                 break
@@ -238,7 +238,7 @@ def build_overnight_range_breakout_ledger(
                 break
         if exit_bar is None and active_bars:
             exit_bar = active_bars[-1]
-            exit_price = float(exit_bar["bid_close"] if side == "long" else exit_bar["ask_close"])
+            exit_price = float(exit_bar[pricing.close_column(side)])
             exit_reason = "time"
 
         if exit_bar is not None and exit_price is not None:

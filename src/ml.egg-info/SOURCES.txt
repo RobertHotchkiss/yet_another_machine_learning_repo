@@ -3,6 +3,8 @@ pyproject.toml
 src/libs/overnight_range/__init__.py
 src/libs/overnight_range/breakout.py
 src/libs/overnight_range/chart.py
+src/libs/overnight_range/features.py
+src/libs/overnight_range/pricing.py
 src/ml.egg-info/PKG-INFO
 src/ml.egg-info/SOURCES.txt
 src/ml.egg-info/dependency_links.txt
@@ -27,6 +29,8 @@ tests/test_live_support.py
 tests/test_model.py
 tests/test_overnight_range_breakout.py
 tests/test_overnight_range_chart.py
+tests/test_overnight_range_features.py
 tests/test_pipeline.py
 tests/test_trade_binance_to_deribit.py
 tests/test_tuning.py
+tests/test_walk_forward_overnight_range.py

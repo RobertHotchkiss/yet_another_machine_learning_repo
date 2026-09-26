@@ -72,7 +72,8 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--minimum-train-rows", type=int, default=100)
     parser.add_argument("--minimum-validation-rows", type=int, default=20)
     parser.add_argument("--minimum-validation-coverage", type=float, default=0.10)
-    parser.add_argument("--coverage-threshold", type=float, default=0.95)
+    parser.add_argument("--coverage-threshold", type=float, default=0.0)
+    parser.add_argument("--price-mode", choices=("auto", "bid_ask", "midpoint"), default="auto")
     parser.add_argument("--buffer-pips", type=float, default=3.0)
     parser.add_argument("--stop-range-multiple", type=float, default=0.5)
     parser.add_argument("--target-range-multiple", type=float, default=2.0)
@@ -84,6 +85,16 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--seed", type=int, default=18616)
     parser.add_argument("--n-jobs", type=int, default=-1)
     return parser
+
+
+def load_bars(path: Path) -> pl.DataFrame:
+    """Load project Parquet bars or midpoint CSV bars with epoch-ms timestamps."""
+    if path.suffix.lower() != ".csv":
+        return pl.read_parquet(path)
+    bars = pl.read_csv(path, schema_overrides={"timestamp": pl.Int64})
+    if "timestamp" not in bars.columns:
+        raise ValueError("CSV input must contain a timestamp column.")
+    return bars.with_columns(pl.from_epoch("timestamp", time_unit="ms").dt.replace_time_zone("UTC").alias("timestamp"))
 
 
 def model_settings(args: argparse.Namespace) -> ModelSettings:
@@ -240,14 +251,15 @@ def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
     if not 0 <= args.coverage_threshold <= 1:
         raise ValueError("coverage-threshold must be in [0, 1].")
-    bars = pl.read_parquet(args.parquet_path)
+    bars = load_bars(args.parquet_path)
     breakout = OvernightRangeBreakoutConfig(
         buffer_pips=args.buffer_pips, stop_range_multiple=args.stop_range_multiple,
-        target_range_multiple=args.target_range_multiple,
+        target_range_multiple=args.target_range_multiple, price_mode=args.price_mode,
     )
     feature = OvernightRangeFeatureConfig(
         minimum_range_coverage=args.coverage_threshold,
         minimum_trade_coverage=args.coverage_threshold,
+        price_mode=args.price_mode,
     )
     ledger = build_overnight_range_breakout_ledger(bars, breakout)
     dataset, feature_columns = build_overnight_range_features(ledger, bars, feature)

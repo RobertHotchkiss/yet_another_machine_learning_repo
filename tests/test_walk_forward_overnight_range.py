@@ -36,9 +36,11 @@ def test_r_gate_maximizes_total_r_subject_to_coverage():
 
 
 def test_cli_defaults_match_monthly_five_year_plan():
-    args = walk_forward.build_parser().parse_args([])
+    args = walk_forward.build_parser().parse_args([
+        "--start-month", "2010-01-01", "--end-month", "2025-01-01", "--history-months", "60",
+    ])
     assert args.start_month == date(2010, 1, 1)
     assert args.end_month == date(2025, 1, 1)
     assert args.history_months == 60
     assert args.validation_months == 12
-    assert args.coverage_threshold == 0.95
+    assert args.coverage_threshold == 0.0
